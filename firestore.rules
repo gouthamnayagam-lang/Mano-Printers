@@ -1,0 +1,52 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    // The owner's inbox must be verified before the account gets business-wide access.
+    function businessOwner() {
+      return signedIn()
+        && request.auth.token.email == 'your-father-email@example.com'
+        && request.auth.token.email_verified == true;
+    }
+
+    // A customer can read and create only their own profile document.
+    match /users/{userId} {
+      allow create, read, update: if signedIn() && request.auth.uid == userId;
+      allow delete: if false;
+    }
+
+    match /orders/{orderId} {
+      // Customers may place orders only as themselves. The business owner can read all orders.
+      allow create: if signedIn()
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.status == 'New'
+        && request.resource.data.quantity is int
+        && request.resource.data.quantity >= 1
+        && request.resource.data.quantity <= 100000
+        && request.resource.data.productType is string
+        && request.resource.data.customerName is string
+        && request.resource.data.phone is string
+        && request.resource.data.keys().hasOnly([
+          'userId', 'customerName', 'email', 'phone', 'productType', 'quantity',
+          'size', 'paper', 'binding', 'designBrief', 'deliveryAddress', 'neededBy',
+          'status', 'createdAt'
+        ]);
+
+      allow read: if signedIn() && (
+        resource.data.userId == request.auth.uid ||
+        businessOwner()
+      );
+
+      // Only the exact business-owner email can update order status or delete an order.
+      allow update: if businessOwner()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status'])
+        && request.resource.data.status in ['New', 'Confirmed', 'In production', 'Completed', 'Cancelled'];
+
+      allow delete: if businessOwner();
+    }
+  }
+}
